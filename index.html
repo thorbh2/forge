@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Forge - a build pipeline that triages itself</title>
+<meta name="description" content="Pitch a build idea with a spec on GenLayer. A validator set reads the spec, scores its feasibility, and moves the card to Greenlit or Shelved - a kanban board judged by consensus." />
+<link rel="stylesheet" href="./styles.css?v=1">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://rsms.me/"><link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <a class="brand" href="#"><span class="brand-mark"><i class="ph-fill ph-hammer"></i></span> Forge</a>
+    <div class="board-stats" id="boardStats"></div>
+    <div class="top-end">
+      <span id="walletslot"><button class="btn ghost" id="connectBtn"><i class="ph-bold ph-wallet"></i> Connect</button></span>
+      <button class="btn primary" id="pitchBtn"><i class="ph-bold ph-plus"></i> Pitch an idea</button>
+    </div>
+  </header>
+
+  <div class="board" id="board"><div class="board-loading">Loading the pipeline…</div></div>
+</div>
+
+<!-- pitch drawer (right slide-in) -->
+<div class="drawer-scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head"><span><i class="ph-bold ph-lightbulb"></i> Pitch an idea</span><button class="dx" id="drawerX"><i class="ph-bold ph-x"></i></button></div>
+  <div class="drawer-body">
+    <p class="drawer-intro">Describe what you want to build and link a spec. The validators will score it and decide if it advances.</p>
+    <label>Title</label>
+    <input id="pTitle" maxlength="80" placeholder="e.g. A markdown-to-slides converter" />
+    <label>The pitch</label>
+    <textarea id="pPitch" maxlength="280" placeholder="One or two sentences: what it does and why it's worth building."></textarea>
+    <label>Spec / reference URL</label>
+    <input id="pUrl" placeholder="https://… a page describing the standard or approach" />
+    <button class="btn primary wide" id="pitchSubmit"><i class="ph-bold ph-hammer"></i> Add to the forge</button>
+    <p class="drawer-note">Lands in <b>Pitched</b>. Run a review to send it through the validators.</p>
+  </div>
+</aside>
+
+<div id="log"></div>
+<script type="module" src="./app.js?v=1"></script>
+</body>
+</html>
