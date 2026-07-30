@@ -159,6 +159,7 @@ def _ruling_prompt(kind, idea_public, current_verdict, current_summary, claim, e
         "confidenceDeltaBps (-10000..10000), riskFlags. Current verdict: " + current_verdict +
         ". Current summary: " + current_summary + ". Idea: " + json.dumps(idea_public, sort_keys=True) +
         ". Dispute claim: " + claim + ". Evidence:\n" + evidence_text
+        + "\nRequired revisedVerdict options: greenlit|shelved|needs_revision."
     )
 
 
@@ -184,10 +185,12 @@ class Forge(gl.Contract):
     idx_idea_audits: TreeMap[str, str]
     recent_ids: DynArray[str]
     forge_standard: str
+    admin: str
     clock: u256
 
     def __init__(self) -> None:
         self.clock = 0
+        self.admin = gl.message.sender_address.as_hex
         self.forge_standard = "Greenlight build ideas only when they are technically feasible, scoped, useful, supported by a real spec, and honest about execution risk."
 
     def _ilist(self, tree: TreeMap[str, str], key: str) -> list:
@@ -249,8 +252,28 @@ class Forge(gl.Contract):
                 "status": idea["status"], "verdict": idea["verdict"], "score": idea["score"]}
 
     def _require_owner(self, idea: dict, actor: str) -> None:
-        if str(idea.get("author", "")).lower() != str(actor).lower():
-            raise Exception("only_author")
+        if str(actor).lower() != self.admin.lower() and str(idea.get("author", "")).lower() != str(actor).lower():
+            raise Exception("record_operator_only")
+
+
+    def _require_admin(self) -> None:
+        if gl.message.sender_address.as_hex.lower() != self.admin.lower():
+            raise Exception("admin_only")
+
+    def _has_open_filings(self, record: dict) -> bool:
+        for challenge_id in record.get("challengeIds", []):
+            try:
+                if json.loads(self.challenges[int(challenge_id)]).get("status") == "open":
+                    return True
+            except Exception:
+                continue
+        for appeal_id in record.get("appealIds", []):
+            try:
+                if json.loads(self.appeals[int(appeal_id)]).get("status") == "open":
+                    return True
+            except Exception:
+                continue
+        return False
 
     def _require_mutable(self, idea: dict) -> None:
         if idea["status"] in ("FINALIZED", "ARCHIVED"):
@@ -366,6 +389,8 @@ class Forge(gl.Contract):
 
     @gl.public.write
     def set_forge_standard(self, standard: str) -> str:
+        if gl.message.sender_address.as_hex.lower() != self.admin.lower():
+            raise Exception("admin_only")
         self.clock += 1
         s = _s(standard, 1600)
         if s == "":
@@ -414,6 +439,7 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
+        self._require_owner(idea, actor)
         self._require_mutable(idea)
         sid = self._add_source_internal(idea, actor, url, source_type, note)
         self._add_audit(idea, actor, "add_spec_source", "Source " + sid + " added.", idea["status"], idea["status"])
@@ -425,6 +451,7 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
+        self._require_owner(idea, actor)
         self._require_mutable(idea)
         t = _s(title, 220)
         if t == "":
@@ -446,6 +473,7 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
+        self._require_owner(idea, actor)
         self._require_mutable(idea)
         r = _s(risk, 700)
         if r == "":
@@ -466,6 +494,7 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
+        self._require_owner(idea, actor)
         self._require_mutable(idea)
         if idea["status"] not in ("PITCHED", "REVIEWED"):
             raise Exception("invalid_transition")
@@ -480,6 +509,7 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
+        self._require_owner(idea, actor)
         self._require_mutable(idea)
         if idea["status"] not in ("PITCHED", "SPEC_REVIEW", "REVIEWED"):
             raise Exception("invalid_transition")
@@ -583,6 +613,7 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
+        self._require_owner(idea, actor)
         if idea["status"] != "CHALLENGE_WINDOW":
             raise Exception("invalid_transition")
         ch = self._load_challenge(challenge_id)
@@ -598,7 +629,9 @@ class Forge(gl.Contract):
             except Exception:
                 txt = "[source unavailable]"
             raw = gl.nondet.exec_prompt(_ruling_prompt("challenge", self._idea_public(idea), idea["verdict"], idea["summary"], ch["claim"], txt), response_format="json")
-            return json.dumps(_norm_ruling(raw, ("accepted", "rejected", "partially_accepted", "inconclusive"), "inconclusive"), sort_keys=True)
+            normalized = _norm_ruling(raw, ("accepted", "rejected", "partially_accepted", "inconclusive"), "inconclusive")
+            normalized["revisedVerdict"] = _s(raw.get("revisedVerdict", raw.get("revisedOutcome", "")), 40).lower() if isinstance(raw, dict) else ""
+            return json.dumps(normalized, sort_keys=True)
 
         res = json.loads(gl.eq_principle.prompt_comparative(leader, "Equal if same ruling."))
         ch["status"] = res["ruling"]
@@ -610,6 +643,10 @@ class Forge(gl.Contract):
         idea["score"] = max(0, min(100, int(idea["score"]) + int(res["scoreDelta"])))
         idea["confidenceBps"] = max(0, min(10000, int(idea["confidenceBps"]) + int(res["confidenceDeltaBps"])))
         if res["ruling"] in ("accepted", "partially_accepted"):
+            revised = str(res.get("revisedVerdict", "")).lower()
+            if revised not in ("greenlit", "shelved", "needs_revision",):
+                revised = idea["verdict"]
+            idea["verdict"] = revised
             self._rep_bump(ch["challenger"], 50, "successfulChallenges")
         elif res["ruling"] == "rejected":
             self._rep_bump(ch["challenger"], -30, "failedChallenges")
@@ -622,6 +659,8 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
+        if self._has_open_filings(idea):
+            raise Exception("open_filing_blocks_appeal")
         if idea["status"] not in ("CHALLENGE_WINDOW", "APPEALED"):
             raise Exception("invalid_transition")
         r = _s(reason, 700)
@@ -646,6 +685,7 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
+        self._require_owner(idea, actor)
         if idea["status"] != "APPEALED":
             raise Exception("invalid_transition")
         ap = self._load_appeal(appeal_id)
@@ -661,7 +701,9 @@ class Forge(gl.Contract):
             except Exception:
                 txt = "[source unavailable]"
             raw = gl.nondet.exec_prompt(_ruling_prompt("appeal", self._idea_public(idea), idea["verdict"], idea["summary"], ap["reason"], txt), response_format="json")
-            return json.dumps(_norm_ruling(raw, ("granted", "denied", "partially_granted", "inconclusive"), "inconclusive"), sort_keys=True)
+            normalized = _norm_ruling(raw, ("granted", "denied", "partially_granted", "inconclusive"), "inconclusive")
+            normalized["revisedVerdict"] = _s(raw.get("revisedVerdict", raw.get("revisedOutcome", "")), 40).lower() if isinstance(raw, dict) else ""
+            return json.dumps(normalized, sort_keys=True)
 
         res = json.loads(gl.eq_principle.prompt_comparative(leader, "Equal if same ruling."))
         ap["status"] = res["ruling"]
@@ -673,6 +715,10 @@ class Forge(gl.Contract):
         idea["score"] = max(0, min(100, int(idea["score"]) + int(res["scoreDelta"])))
         idea["confidenceBps"] = max(0, min(10000, int(idea["confidenceBps"]) + int(res["confidenceDeltaBps"])))
         if res["ruling"] in ("granted", "partially_granted"):
+            revised = str(res.get("revisedVerdict", "")).lower()
+            if revised not in ("greenlit", "shelved", "needs_revision",):
+                revised = idea["verdict"]
+            idea["verdict"] = revised
             self._rep_bump(ap["appellant"], 45, "appealsGranted")
         before = idea["status"]
         self._set_status(idea, "CHALLENGE_WINDOW")
@@ -686,6 +732,8 @@ class Forge(gl.Contract):
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
         self._require_owner(idea, actor)
+        if self._has_open_filings(idea):
+            raise Exception("open_filing_blocks_finalize")
         if idea["status"] not in ("REVIEWED", "CHALLENGE_WINDOW"):
             raise Exception("invalid_transition")
         before = idea["status"]

@@ -1,65 +1,132 @@
-"""Tests for FORGE (direct runner). AI review() validated live on studionet."""
+"""Executable Forge V2 permissions and review-lifecycle tests."""
+
+import json
 from pathlib import Path
 
-CONTRACT = str(Path(__file__).resolve().parents[1] / "contracts" / "forge.py")
-PITCHED = 0; GREENLIT = 1; SHELVED = 2
+
+CONTRACT = str(Path(__file__).resolve().parents[1] / "contracts" / "forge_v2.py")
 
 
-def _pitch(f, vm, who, title="A QR code CLI", pitch="A command line tool that generates QR codes", url="https://example.com"):
-    vm.sender = who
-    return f.pitch(title, pitch, url)
+def _deploy_record(deploy, vm, owner):
+    vm.sender = owner
+    contract = deploy(CONTRACT)
+    record_id = contract.create_idea("Validator toolkit", "A scoped public build plan", "https://example.com", "tooling")
+    return contract, str(record_id)
 
 
-def test_pitch(deploy, direct_vm, direct_alice):
-    f = deploy(CONTRACT)
-    iid = _pitch(f, direct_vm, direct_alice)
-    assert iid == 0
-    it = f.get_idea(0)
-    assert it["status"] == PITCHED
-    assert it["title"] == "A QR code CLI"
-    assert it["score"] == 0
+def _mock_review(vm):
+    vm.mock_llm(
+        r"Forge V2, a pragmatic",
+        json.dumps({
+            "verdict": "greenlit",
+            "outcomeStatus": "greenlit",
+            "score": 86,
+            "confidenceBps": 8500,
+            "accuracyBps": 8400,
+            "authenticityBps": 8600,
+            "priorityStrengthBps": 8100,
+            "coordinateMatchBps": 9000,
+            "existenceBps": 9100,
+            "feasibilityBps": 8200,
+            "marketBps": 7600,
+            "executionRiskBps": 2100,
+            "supportBps": 8700,
+            "edgeConsistencyBps": 8300,
+            "summary": "Public evidence supports the reviewed record.",
+            "publicSummary": "Public evidence supports the reviewed record.",
+            "rationale": "The independent source and record align.",
+            "reasoningDigest": "Source-backed review completed.",
+            "recommendedNextStep": "finalize_after_review",
+            "riskFlags": [],
+            "sourceScores": [],
+            "sourceCredibility": [],
+            "signalCredibility": [],
+            "supportingSignalIds": [],
+            "contradictingSignalIds": [],
+            "supportingCitationIds": [],
+            "conflictingCitationIds": [],
+            "supportingEvidenceIds": [],
+            "conflictingEvidenceIds": [],
+            "contradictionIds": [],
+            "revisionRisks": [],
+            "missingEvidence": [],
+        }),
+    )
 
 
-def test_requires_title(deploy, direct_vm, direct_alice):
-    f = deploy(CONTRACT)
+def _mock_ruling(vm, pattern, ruling, revised):
+    vm.mock_llm(
+        pattern,
+        json.dumps({
+            "ruling": ruling,
+            "revisedVerdict": revised,
+            "confidenceDeltaBps": -1100 if revised == "shelved" else 900,
+            "scoreDelta": -20 if revised == "shelved" else 18,
+            "reason": "The filing provides controlling public evidence.",
+            "reasoningDigest": "The reviewed outcome was revised.",
+            "riskFlags": [],
+        }),
+    )
+
+
+def test_owner_and_protocol_permissions_execute(
+    deploy, direct_vm, direct_alice, direct_bob
+):
+    contract, record_id = _deploy_record(deploy, direct_vm, direct_alice)
+
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("admin_only"):
+        contract.set_forge_standard("A controlled build standard")
+
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("record_operator_only"):
+        contract.add_spec_source(record_id, "https://example.org", "spec", "Independent specification")
+    with direct_vm.expect_revert("record_operator_only"):
+        contract.review_idea_with_genlayer(record_id)
+
+
+def test_challenge_and_appeal_revise_record_before_finalization(
+    deploy, direct_vm, direct_alice, direct_bob
+):
+    contract, record_id = _deploy_record(deploy, direct_vm, direct_alice)
     direct_vm.sender = direct_alice
-    with direct_vm.expect_revert("a title is required"):
-        f.pitch("", "p", "https://x.com")
+    _mock_review(direct_vm)
+    contract.review_idea_with_genlayer(record_id)
+    contract.open_challenge_window(record_id)
 
+    direct_vm.sender = direct_bob
+    challenge_id = contract.submit_challenge(
+        record_id,
+        "A newer source contradicts the reviewed result.",
+        "https://example.org/challenge",
+    )
 
-def test_requires_pitch(deploy, direct_vm, direct_alice):
-    f = deploy(CONTRACT)
     direct_vm.sender = direct_alice
-    with direct_vm.expect_revert("a pitch is required"):
-        f.pitch("t", "  ", "https://x.com")
+    with direct_vm.expect_revert("open_filing_blocks_finalize"):
+        contract.finalize_idea(record_id)
 
+    _mock_ruling(direct_vm, r"Forge V2 challenge", "accepted", "shelved")
+    contract.resolve_challenge_with_genlayer(record_id, challenge_id)
+    record = json.loads(contract.get_idea_record(record_id))
+    assert record["verdict"] == "shelved"
 
-def test_requires_spec(deploy, direct_vm, direct_alice):
-    f = deploy(CONTRACT)
+    direct_vm.sender = direct_bob
+    appeal_id = contract.submit_appeal(
+        record_id,
+        "A final publication restores the original result.",
+        "https://example.net/appeal",
+    )
+
     direct_vm.sender = direct_alice
-    with direct_vm.expect_revert("a spec URL is required"):
-        f.pitch("t", "p", "")
+    with direct_vm.expect_revert("open_filing_blocks_finalize"):
+        contract.finalize_idea(record_id)
 
+    _mock_ruling(direct_vm, r"Forge V2 appeal", "granted", "greenlit")
+    contract.resolve_appeal_with_genlayer(record_id, appeal_id)
+    contract.finalize_idea(record_id)
 
-def test_review_requires_pitched(deploy, direct_vm, direct_alice):
-    f = deploy(CONTRACT)
-    _pitch(f, direct_vm, direct_alice)
-    with direct_vm.expect_revert("no such idea"):
-        f.review(9)
-
-
-def test_stats(deploy, direct_vm, direct_alice):
-    f = deploy(CONTRACT)
-    _pitch(f, direct_vm, direct_alice, title="A")
-    _pitch(f, direct_vm, direct_alice, title="B")
-    s = f.get_stats()
-    assert s["total"] == 2
-    assert s["pitched"] == 2
-
-
-def test_multiple(deploy, direct_vm, direct_alice):
-    f = deploy(CONTRACT)
-    _pitch(f, direct_vm, direct_alice, title="One")
-    _pitch(f, direct_vm, direct_alice, title="Two")
-    assert f.get_idea_count() == 2
-    assert f.get_idea(1)["title"] == "Two"
+    record = json.loads(contract.get_idea_record(record_id))
+    assert record["status"] == "FINALIZED"
+    assert record["verdict"] == "greenlit"
+    assert record["challengeIds"] == [challenge_id]
+    assert record["appealIds"] == [appeal_id]

@@ -10,7 +10,7 @@ Forge is a review bench for proposals. It keeps idea specs, milestones, risk not
 | --- | --- |
 | Live app | https://assmore22-forge.vercel.app |
 | GitHub | https://github.com/assmore22/forge |
-| Contract | https://explorer-studio.genlayer.com/contracts/0xa36eb7430894C299393647Fe21Ed30D7C3dBB75c |
+| Contract | https://explorer-studio.genlayer.com/address/0xa36eb7430894C299393647Fe21Ed30D7C3dBB75c |
 
 ## Chain Record
 

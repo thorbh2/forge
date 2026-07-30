@@ -11,8 +11,10 @@
 <link rel="preconnect" href="https://rsms.me/"><link rel="stylesheet" href="https://rsms.me/inter/inter.css">
 <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
 <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<style>.audit-sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}</style>
 </head>
 <body>
+<h1 class="audit-sr-only">Forge idea workshop</h1>
 <div class="app">
 
   <header class="topbar">
@@ -24,7 +26,7 @@
     </div>
   </header>
 
-  <div class="board" id="board"><div class="board-loading">Loading the pipeline…</div></div>
+  <div class="board" id="board"><div class="board-loading">Loading the pipeline...</div></div>
 </div>
 
 <!-- pitch drawer (right slide-in) -->
@@ -38,7 +40,7 @@
     <label>The pitch</label>
     <textarea id="pPitch" maxlength="280" placeholder="One or two sentences: what it does and why it's worth building."></textarea>
     <label>Spec / reference URL</label>
-    <input id="pUrl" placeholder="https://… a page describing the standard or approach" />
+    <input id="pUrl" placeholder="https://... a page describing the standard or approach" />
     <button class="btn primary wide" id="pitchSubmit"><i class="ph-bold ph-hammer"></i> Add to the forge</button>
     <p class="drawer-note">Lands in <b>Pitched</b>. Run a review to send it through the validators.</p>
   </div>

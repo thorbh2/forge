@@ -1,5 +1,6 @@
 import { makeReader, write, connectWallet, activeAccount, short, fmtErr }
-  from "../shared/genlayer-lite.js";
+  from "./shared/genlayer-lite.js";
+import { mountReviewDesk } from "./shared/review-desk.js";
 
 const CONTRACT = "0xa36eb7430894C299393647Fe21Ed30D7C3dBB75c";
 const { read } = makeReader(CONTRACT);
@@ -9,6 +10,16 @@ const COLS = [
   { key: "shelved", status: 2, title: "Shelved", cls: "col-shelved" },
 ];
 const $ = (id) => document.getElementById(id);
+
+queueMicrotask(() => mountReviewDesk({
+  contract: CONTRACT, read, write, ensureWallet, fmtErr,
+  entity: "Idea", countMethod: "get_idea_count", recordMethod: "get_idea_record",
+  openWindowMethod: "open_challenge_window", submitChallengeMethod: "submit_challenge", resolveChallengeMethod: "resolve_challenge_with_genlayer",
+  submitAppealMethod: "submit_appeal", resolveAppealMethod: "resolve_appeal_with_genlayer", finalMethod: "finalize_idea", archiveMethod: "archive_idea",
+  variant: "ribbon", kicker: "Greenlight review gate", title: "Forge decision gate",
+  intro: "Challenge a greenlight with implementation evidence, recalculate the idea after review, and finalize the build decision without skipping appeal.",
+  finalLabel: "Lock decision", archiveLabel: "Archive idea",
+}));
 const esc = (s) => (s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (_) { return u; } };
 
@@ -23,8 +34,7 @@ function toast(msg, kind = "", title = "forge") {
 async function load() {
   stats = await read("get_stats");
   const n = Number(await read("get_idea_count"));
-  const out = [];
-  for (let i = 0; i < n; i++) out.push({ id: i, ...(await read("get_idea", [i])) });
+  const out = await Promise.all(Array.from({ length: n }, (_, i) => read("get_idea", [i]).then((record) => ({ id: i, ...record }))));
   ideas = out;
 }
 
@@ -79,7 +89,7 @@ $("scrim").onclick = closeDrawer;
 async function doReview(id) {
   if (!confirm("Run the AI review? Validators read the spec and score it, then move the card. Calls a real LLM consensus.")) return;
   const btn = document.querySelector(`[data-review="${id}"]`); if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> reviewing'; }
-  try { await ensureWallet(); toast("Validators reading the spec…", "", "review"); await write(CONTRACT, "review", [id]); toast("Reviewed - card moved.", "ok"); await load(); render(); }
+  try { await ensureWallet(); toast("Validators reading the spec...", "", "review"); await write(CONTRACT, "review", [id]); toast("Reviewed - card moved.", "ok"); await load(); render(); }
   catch (e) { toast(fmtErr(e), "err"); if (btn) { btn.disabled = false; btn.innerHTML = "Run AI review"; } }
 }
 async function doPitch() {
