@@ -8,8 +8,8 @@ Forge is a review bench for proposals. It keeps idea specs, milestones, risk not
 
 | Surface | Link |
 | --- | --- |
-| Live app | https://assmore22-forge.vercel.app |
-| GitHub | https://github.com/assmore22/forge |
+| Live app | https://thorbh2-forge.vercel.app |
+| GitHub | https://github.com/thorbh2/forge |
 | Contract | https://explorer-studio.genlayer.com/address/0xa36eb7430894C299393647Fe21Ed30D7C3dBB75c |
 
 ## Chain Record
