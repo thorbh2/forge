@@ -8,7 +8,7 @@ Forge is a review bench for proposals. It keeps idea specs, milestones, risk not
 
 | Surface | Link |
 | --- | --- |
-| Live app | https://thorbh2-forge.vercel.app |
+| Live app | https://forge-proposal-review.vercel.app |
 | GitHub | https://github.com/thorbh2/forge |
 | Contract | https://explorer-studio.genlayer.com/address/0xa36eb7430894C299393647Fe21Ed30D7C3dBB75c |
 
