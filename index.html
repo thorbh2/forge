@@ -37,10 +37,21 @@
     <p class="drawer-intro">Describe what you want to build and link a spec. The validators will score it and decide if it advances.</p>
     <label>Title</label>
     <input id="pTitle" maxlength="80" placeholder="e.g. A markdown-to-slides converter" />
+    <label>Category</label>
+    <select id="pCategory"><option value="tooling">Tooling</option><option value="ai">AI</option><option value="web3">Web3</option><option value="infra">Infrastructure</option><option value="consumer">Consumer</option><option value="research">Research</option></select>
     <label>The pitch</label>
     <textarea id="pPitch" maxlength="280" placeholder="One or two sentences: what it does and why it's worth building."></textarea>
     <label>Spec / reference URL</label>
     <input id="pUrl" placeholder="https://... a page describing the standard or approach" />
+    <label>Independent source</label>
+    <input id="pSource" placeholder="https://... market or technical evidence" />
+    <label>First measurable milestone</label>
+    <input id="pMilestone" maxlength="120" placeholder="Public alpha passes acceptance suite" />
+    <input id="pAcceptance" placeholder="https://... public acceptance criteria" />
+    <input id="pEstimate" maxlength="80" placeholder="Estimate, e.g. six weeks" />
+    <label>Material execution risk</label>
+    <textarea id="pRisk" maxlength="300" placeholder="Name one risk that can invalidate the proposal."></textarea>
+    <input id="pRiskUrl" placeholder="https://... evidence for the risk" />
     <button class="btn primary wide" id="pitchSubmit"><i class="ph-bold ph-hammer"></i> Add to the forge</button>
     <p class="drawer-note">Lands in <b>Pitched</b>. Run a review to send it through the validators.</p>
   </div>

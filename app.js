@@ -2,7 +2,7 @@ import { makeReader, write, connectWallet, activeAccount, short, fmtErr }
   from "./shared/genlayer-lite.js";
 import { mountReviewDesk } from "./shared/review-desk.js";
 
-const CONTRACT = "0xa36eb7430894C299393647Fe21Ed30D7C3dBB75c";
+const CONTRACT = "0xd5cb7A1C7B17395AF5dC3B0d68e8b7998D454EfD";
 const { read } = makeReader(CONTRACT);
 const COLS = [
   { key: "pitched", status: 0, title: "Pitched", cls: "col-pitched" },
@@ -58,6 +58,7 @@ function card(it) {
   return `<div class="card ${it.status === 2 ? "shelved" : ""}">
     <div class="card-top"><h3>${esc(it.title)}</h3>${scoreBadge}</div>
     <div class="card-pitch">${esc(it.pitch)}</div>
+    <div class="card-reason">${Number(it.sourceCount || 0)} sources &middot; ${Number(it.milestoneCount || 0)} milestones &middot; ${Number(it.riskCount || 0)} risks<br><span class="mono">${esc(it.lifecycleStatus || "PITCHED")}</span></div>
     ${reason}
     <div class="card-foot"><span>${short(it.author)}</span>${action}</div>
   </div>`;
@@ -89,20 +90,28 @@ $("scrim").onclick = closeDrawer;
 async function doReview(id) {
   if (!confirm("Run the AI review? Validators read the spec and score it, then move the card. Calls a real LLM consensus.")) return;
   const btn = document.querySelector(`[data-review="${id}"]`); if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> reviewing'; }
-  try { await ensureWallet(); toast("Validators reading the spec...", "", "review"); await write(CONTRACT, "review", [id]); toast("Reviewed - card moved.", "ok"); await load(); render(); }
+  try { await ensureWallet(); toast("Validators reading sources, milestones and risks...", "", "review"); await write(CONTRACT, "review_idea_with_genlayer", [String(id)]); toast("Review recorded; challenge period opened.", "ok"); await load(); render(); }
   catch (e) { toast(fmtErr(e), "err"); if (btn) { btn.disabled = false; btn.innerHTML = "Run AI review"; } }
 }
 async function doPitch() {
   const title = $("pTitle").value.trim(), pitch = $("pPitch").value.trim(), url = $("pUrl").value.trim();
+  const category = $("pCategory").value, source = $("pSource").value.trim();
+  const milestone = $("pMilestone").value.trim(), acceptance = $("pAcceptance").value.trim(), estimate = $("pEstimate").value.trim();
+  const risk = $("pRisk").value.trim(), riskUrl = $("pRiskUrl").value.trim();
   if (!title) return toast("Give it a title.", "err");
   if (!pitch) return toast("Write the pitch.", "err");
   if (!url) return toast("Add a spec URL.", "err");
+  if (!source || !milestone || !acceptance || !estimate || !risk || !riskUrl) return toast("Complete the source, milestone and risk register.", "err");
   const btn = $("pitchSubmit"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> forging';
   try {
     await ensureWallet();
-    await write(CONTRACT, "pitch", [title, pitch, url]);
-    toast("Added to the forge.", "ok");
-    $("pTitle").value = $("pPitch").value = $("pUrl").value = "";
+    const ideaId = String(Number(await read("get_idea_count")));
+    await write(CONTRACT, "create_idea", [title, pitch, url, category]);
+    await write(CONTRACT, "add_spec_source", [ideaId, source, "market", "Independent evidence submitted with the proposal."]);
+    await write(CONTRACT, "add_milestone", [ideaId, milestone, acceptance, estimate]);
+    await write(CONTRACT, "add_risk", [ideaId, risk, riskUrl]);
+    toast("Proposal, evidence, milestone and risk register added.", "ok");
+    ["pTitle", "pPitch", "pUrl", "pSource", "pMilestone", "pAcceptance", "pEstimate", "pRisk", "pRiskUrl"].forEach((id) => $(id).value = "");
     closeDrawer(); await load(); render();
   } catch (e) { toast(fmtErr(e), "err"); btn.disabled = false; btn.innerHTML = "Add to the forge"; }
 }

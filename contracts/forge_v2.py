@@ -2,6 +2,7 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
 import json
+from datetime import datetime, timezone
 
 STATUSES = ("PITCHED", "SPEC_REVIEW", "REVIEWED", "CHALLENGE_WINDOW", "APPEALED", "FINALIZED", "ARCHIVED")
 VERDICTS = ("unreviewed", "greenlit", "shelved", "needs_revision")
@@ -9,6 +10,13 @@ CATEGORIES = ("tooling", "ai", "web3", "infra", "consumer", "research", "other")
 SOURCE_TYPES = ("spec", "reference", "market", "technical", "risk", "challenge", "appeal", "other")
 MAX_INPUT = 4000
 MAX_URL = 700
+CHALLENGE_WINDOW_SECONDS = 3600
+APPEAL_WINDOW_SECONDS = 3600
+FILING_RESOLUTION_SECONDS = 3600
+
+
+def _now() -> int:
+    return int(datetime.now(timezone.utc).timestamp())
 
 
 def _s(v, n=MAX_INPUT):
@@ -244,6 +252,9 @@ class Forge(gl.Contract):
     def _legacy_idea(self, idea: dict) -> dict:
         return {"author": idea["author"], "title": idea["title"], "pitch": idea["pitch"],
                 "spec_url": idea["specUrl"], "status": self._legacy_status(idea),
+                "lifecycleStatus": idea.get("status", "PITCHED"), "category": idea.get("category", "other"),
+                "sourceCount": len(idea.get("sourceIds", [])), "milestoneCount": len(idea.get("milestoneIds", [])),
+                "riskCount": len(idea.get("riskIds", [])), "challengeDeadline": idea.get("challengeDeadline", "0"),
                 "score": int(idea["score"]), "rationale": idea["rationale"]}
 
     def _idea_public(self, idea: dict) -> dict:
@@ -417,7 +428,8 @@ class Forge(gl.Contract):
                 "executionRiskBps": 0, "rationale": "", "summary": "", "riskFlags": [],
                 "recommendedNextStep": "", "sourceIds": [], "milestoneIds": [],
                 "riskIds": [], "reviewIds": [], "challengeIds": [], "appealIds": [],
-                "auditIds": [], "createdAt": str(int(self.clock))}
+                "auditIds": [], "reviewedAt": "0", "challengeDeadline": "0", "appealDeadline": "0",
+                "createdAt": str(int(self.clock))}
         self.ideas.append(json.dumps(idea))
         self._idx_add(self.idx_status, "PITCHED", iid)
         self._idx_add(self.idx_author, actor.lower(), iid)
@@ -528,7 +540,11 @@ class Forge(gl.Contract):
             raw = gl.nondet.exec_prompt(_review_prompt(standard, public, src, milestones, risks), response_format="json")
             return json.dumps(_norm_review(raw, source_ids), sort_keys=True)
 
-        res = json.loads(gl.eq_principle.prompt_comparative(leader, "Equal if same verdict with score within 15 points."))
+        res = json.loads(gl.eq_principle.prompt_comparative(
+            leader,
+            "Equal only if verdict, score, confidenceBps, feasibilityBps, marketBps, executionRiskBps, "
+            "riskFlags, recommendedNextStep and every sourceScores entry are exactly identical.",
+        ))
         rid = str(len(self.reviews))
         self.reviews.append(json.dumps({"id": rid, "ideaId": idea_id, "reviewer": actor,
                                         "verdict": res["verdict"], "score": res["score"],
@@ -561,11 +577,12 @@ class Forge(gl.Contract):
                     self._rep_bump(src["submitter"], 18, "usefulSources")
             except Exception:
                 pass
+        idea["reviewedAt"] = str(_now())
+        idea["challengeDeadline"] = str(_now() + CHALLENGE_WINDOW_SECONDS)
+        idea["appealDeadline"] = "0"
         before = idea["status"]
-        self._set_status(idea, "REVIEWED")
-        if res["verdict"] == "greenlit":
-            self._rep_bump(idea["author"], 70, "greenlitIdeas")
-        self._add_audit(idea, actor, "review_idea_with_genlayer", res["summary"][:180], before, "REVIEWED")
+        self._set_status(idea, "CHALLENGE_WINDOW")
+        self._add_audit(idea, actor, "review_idea_with_genlayer", res["summary"][:180], before, "CHALLENGE_WINDOW")
         self._store_idea(idea)
         return res["verdict"]
 
@@ -578,9 +595,11 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
-        self._require_owner(idea, actor)
+        if idea["status"] == "CHALLENGE_WINDOW" and _now() <= int(idea.get("challengeDeadline", "0")):
+            return "CHALLENGE_WINDOW"
         if idea["status"] != "REVIEWED":
             raise Exception("invalid_transition")
+        idea["challengeDeadline"] = str(_now() + CHALLENGE_WINDOW_SECONDS)
         self._set_status(idea, "CHALLENGE_WINDOW")
         self._add_audit(idea, actor, "open_challenge_window", "Challenge window opened.", "REVIEWED", "CHALLENGE_WINDOW")
         self._store_idea(idea)
@@ -593,6 +612,8 @@ class Forge(gl.Contract):
         idea = self._load_idea(idea_id)
         if idea["status"] != "CHALLENGE_WINDOW":
             raise Exception("challenge_window_closed")
+        if _now() > int(idea.get("challengeDeadline", "0")):
+            raise Exception("challenge_window_closed")
         c = _s(claim, 700)
         if c == "":
             raise Exception("empty_challenge")
@@ -601,7 +622,8 @@ class Forge(gl.Contract):
         self.challenges.append(json.dumps({"id": cid, "ideaId": idea_id, "challenger": actor,
                                            "claim": c, "evidenceUrl": clean, "status": "open",
                                            "ruling": "", "scoreDelta": 0, "confidenceDeltaBps": 0,
-                                           "riskFlags": [], "createdAt": str(int(self.clock))}))
+                                           "riskFlags": [], "resolutionDeadline": str(_now() + FILING_RESOLUTION_SECONDS),
+                                           "createdAt": str(int(self.clock))}))
         idea["challengeIds"].append(cid)
         self._idx_add(self.idx_idea_challenges, idea_id, cid)
         self._add_audit(idea, actor, "submit_challenge", c[:180], "CHALLENGE_WINDOW", "CHALLENGE_WINDOW")
@@ -613,7 +635,6 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
-        self._require_owner(idea, actor)
         if idea["status"] != "CHALLENGE_WINDOW":
             raise Exception("invalid_transition")
         ch = self._load_challenge(challenge_id)
@@ -633,7 +654,10 @@ class Forge(gl.Contract):
             normalized["revisedVerdict"] = _s(raw.get("revisedVerdict", raw.get("revisedOutcome", "")), 40).lower() if isinstance(raw, dict) else ""
             return json.dumps(normalized, sort_keys=True)
 
-        res = json.loads(gl.eq_principle.prompt_comparative(leader, "Equal if same ruling."))
+        res = json.loads(gl.eq_principle.prompt_comparative(
+            leader,
+            "Equal only if ruling, revisedVerdict, scoreDelta, confidenceDeltaBps and riskFlags are exactly identical.",
+        ))
         ch["status"] = res["ruling"]
         ch["ruling"] = res["reason"]
         ch["scoreDelta"] = res["scoreDelta"]
@@ -650,9 +674,28 @@ class Forge(gl.Contract):
             self._rep_bump(ch["challenger"], 50, "successfulChallenges")
         elif res["ruling"] == "rejected":
             self._rep_bump(ch["challenger"], -30, "failedChallenges")
+        idea["appealDeadline"] = str(_now() + APPEAL_WINDOW_SECONDS)
         self._add_audit(idea, actor, "resolve_challenge_with_genlayer", res["reason"][:180], "CHALLENGE_WINDOW", "CHALLENGE_WINDOW")
         self._store_idea(idea)
         return res["ruling"]
+
+    @gl.public.write
+    def expire_challenge(self, idea_id: str, challenge_id: str) -> str:
+        self.clock += 1
+        actor = gl.message.sender_address.as_hex
+        idea = self._load_idea(idea_id)
+        ch = self._load_challenge(challenge_id)
+        if ch["ideaId"] != idea_id or ch["status"] != "open":
+            raise Exception("bad_challenge")
+        if _now() <= int(ch.get("resolutionDeadline", "0")):
+            raise Exception("filing_resolution_active")
+        ch["status"] = "expired"
+        ch["ruling"] = "No resolver acted before the public fallback deadline; no adverse change was applied."
+        self.challenges[int(challenge_id)] = json.dumps(ch)
+        idea["appealDeadline"] = str(_now() + APPEAL_WINDOW_SECONDS)
+        self._add_audit(idea, actor, "expire_challenge", ch["ruling"], "CHALLENGE_WINDOW", "CHALLENGE_WINDOW")
+        self._store_idea(idea)
+        return "expired"
 
     @gl.public.write
     def submit_appeal(self, idea_id: str, reason: str, evidence_url: str) -> str:
@@ -663,6 +706,8 @@ class Forge(gl.Contract):
             raise Exception("open_filing_blocks_appeal")
         if idea["status"] not in ("CHALLENGE_WINDOW", "APPEALED"):
             raise Exception("invalid_transition")
+        if len(idea["challengeIds"]) == 0 or _now() > int(idea.get("appealDeadline", "0")):
+            raise Exception("appeal_window_closed")
         r = _s(reason, 700)
         if r == "":
             raise Exception("empty_appeal")
@@ -671,7 +716,8 @@ class Forge(gl.Contract):
         self.appeals.append(json.dumps({"id": aid, "ideaId": idea_id, "appellant": actor,
                                         "reason": r, "evidenceUrl": clean, "status": "open",
                                         "ruling": "", "scoreDelta": 0, "confidenceDeltaBps": 0,
-                                        "riskFlags": [], "createdAt": str(int(self.clock))}))
+                                        "riskFlags": [], "resolutionDeadline": str(_now() + FILING_RESOLUTION_SECONDS),
+                                        "createdAt": str(int(self.clock))}))
         idea["appealIds"].append(aid)
         self._idx_add(self.idx_idea_appeals, idea_id, aid)
         before = idea["status"]
@@ -685,7 +731,6 @@ class Forge(gl.Contract):
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
-        self._require_owner(idea, actor)
         if idea["status"] != "APPEALED":
             raise Exception("invalid_transition")
         ap = self._load_appeal(appeal_id)
@@ -705,7 +750,10 @@ class Forge(gl.Contract):
             normalized["revisedVerdict"] = _s(raw.get("revisedVerdict", raw.get("revisedOutcome", "")), 40).lower() if isinstance(raw, dict) else ""
             return json.dumps(normalized, sort_keys=True)
 
-        res = json.loads(gl.eq_principle.prompt_comparative(leader, "Equal if same ruling."))
+        res = json.loads(gl.eq_principle.prompt_comparative(
+            leader,
+            "Equal only if ruling, revisedVerdict, scoreDelta, confidenceDeltaBps and riskFlags are exactly identical.",
+        ))
         ap["status"] = res["ruling"]
         ap["ruling"] = res["reason"]
         ap["scoreDelta"] = res["scoreDelta"]
@@ -720,6 +768,7 @@ class Forge(gl.Contract):
                 revised = idea["verdict"]
             idea["verdict"] = revised
             self._rep_bump(ap["appellant"], 45, "appealsGranted")
+        idea["appealDeadline"] = str(_now())
         before = idea["status"]
         self._set_status(idea, "CHALLENGE_WINDOW")
         self._add_audit(idea, actor, "resolve_appeal_with_genlayer", res["reason"][:180], before, "CHALLENGE_WINDOW")
@@ -727,19 +776,43 @@ class Forge(gl.Contract):
         return res["ruling"]
 
     @gl.public.write
+    def expire_appeal(self, idea_id: str, appeal_id: str) -> str:
+        self.clock += 1
+        actor = gl.message.sender_address.as_hex
+        idea = self._load_idea(idea_id)
+        ap = self._load_appeal(appeal_id)
+        if ap["ideaId"] != idea_id or ap["status"] != "open":
+            raise Exception("bad_appeal")
+        if _now() <= int(ap.get("resolutionDeadline", "0")):
+            raise Exception("filing_resolution_active")
+        ap["status"] = "expired"
+        ap["ruling"] = "No resolver acted before the public fallback deadline; the challenged record remains unchanged."
+        self.appeals[int(appeal_id)] = json.dumps(ap)
+        idea["appealDeadline"] = str(_now())
+        before = idea["status"]
+        self._set_status(idea, "CHALLENGE_WINDOW")
+        self._add_audit(idea, actor, "expire_appeal", ap["ruling"], before, "CHALLENGE_WINDOW")
+        self._store_idea(idea)
+        return "expired"
+
+    @gl.public.write
     def finalize_idea(self, idea_id: str) -> str:
         self.clock += 1
         actor = gl.message.sender_address.as_hex
         idea = self._load_idea(idea_id)
-        self._require_owner(idea, actor)
         if self._has_open_filings(idea):
             raise Exception("open_filing_blocks_finalize")
-        if idea["status"] not in ("REVIEWED", "CHALLENGE_WINDOW"):
+        if idea["status"] != "CHALLENGE_WINDOW":
             raise Exception("invalid_transition")
+        maturity = max(int(idea.get("challengeDeadline", "0")), int(idea.get("appealDeadline", "0")))
+        if _now() < maturity:
+            raise Exception("challenge_period_active")
         before = idea["status"]
         self._set_status(idea, "FINALIZED")
         self._add_audit(idea, actor, "finalize_idea", "Finalized: " + idea["verdict"], before, "FINALIZED")
         self._store_idea(idea)
+        if idea["verdict"] == "greenlit":
+            self._rep_bump(idea["author"], 70, "greenlitIdeas")
         return "FINALIZED"
 
     @gl.public.write
